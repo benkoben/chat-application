@@ -72,7 +72,7 @@ func (s server) Start() error {
             case <-s.quit:
                 return
             default:
-			    time.Sleep(time.Second * 5)
+			    time.Sleep(time.Second * 20)
 
                 m := Message{
                     Timestamp: time.Now().Format(time.RFC850),
@@ -95,13 +95,24 @@ func (s server) Start() error {
         // the server broker.
 		go func() {
 			fmt.Println("Starting a new worker")
-			msgCh := s.broker.Subscribe()
+			msgCh  := s.broker.Subscribe()
+            buffer := make([]byte, 1<<10)
 			for {
 				select {
 				case msg := <-msgCh:
 					conn.Write(msg)
-				case <-s.quit:
+                    case <-s.quit:
 					return
+                default:
+                    // By default just read the connection
+                    // whenever something is recieved just shuffle it
+                    // into the messageChannel. From there the broker will take
+                    // care of distributing it.
+                    n, err := conn.Read(buffer)
+                    if err != nil {
+                        fmt.Println("received a message but could not read it")
+                    }
+                    msgCh<-buffer[:n]
 				}
 			}
 		}()
