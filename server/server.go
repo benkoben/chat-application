@@ -91,30 +91,41 @@ func (s server) Start() error {
 		conn, _ := ln.Accept()
 		fmt.Println("Accepted new connection")
 
-        // For each new connection a new go routine is started that subscribes to
-        // the server broker.
-		go func() {
-			fmt.Println("Starting a new worker")
-			msgCh  := s.broker.Subscribe()
-            buffer := make([]byte, 1<<10)
-			for {
-				select {
-				case msg := <-msgCh:
-					conn.Write(msg)
-                    case <-s.quit:
-					return
-                default:
-                    // By default just read the connection
-                    // whenever something is recieved just shuffle it
-                    // into the messageChannel. From there the broker will take
-                    // care of distributing it.
-                    n, err := conn.Read(buffer)
-                    if err != nil {
-                        fmt.Println("received a message but could not read it")
-                    }
-                    msgCh<-buffer[:n]
-				}
-			}
-		}()
+        // For each accepted connection
+        // the server waits for a client handshake and construct a client. 
+        client, err := handshake(conn)
+        if err != nil {
+            fmt.Printf("handshake with %s failed: %s\n", conn.RemoteAddr(), err)
+        }
+
+        // When the client successfully is instantiated then subscribe to the broker
+        // and start a go routine that handles the connection with the client.
+        msgCh  := s.broker.Subscribe()
+        go client.handleConnection(&msgCh, &s.quit)
 	}
+}
+
+func handshake(conn net.Conn) (*client, error) {
+        // Here we need to implement a handshake to exchange client information.
+        helloMsgBuf := make([]byte, 1<<10)
+        n, err := conn.Read(helloMsgBuf)
+        if err != nil {
+            return nil, fmt.Errorf("could not read the hello message from the client: %s", err)
+        }
+
+        var helloMsg Message
+        if err := json.Unmarshal(helloMsgBuf[:n], &helloMsg); err != nil {
+            return nil, fmt.Errorf("could not unmarshal helloMessage into Message type: %s", err)
+        }
+
+        if helloMsg.Type != msgTypeHello {
+            return nil, fmt.Errorf("invalid message type, expected hello but received %s", helloMsg.Type)
+        }
+
+        c, err := newClient(conn, helloMsg.Author)
+        if err != nil {
+            return nil, fmt.Errorf("could not construct client type: %s", err)
+        }
+
+        return c, nil
 }
