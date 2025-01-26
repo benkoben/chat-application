@@ -62,6 +62,20 @@ func unmarshalMessage(data []byte) (*Message, error) {
    return &msg, nil
 }
 
+// Checks if a message if of a given type, returns true of msg matches t
+func isTypeFromRaw(raw []byte, t messageType) bool {
+    var m Message
+    if err := json.Unmarshal(raw, &m); err != nil {
+        fmt.Println("could not unmarshal raw:", err)
+        return false
+    }
+
+    if m.Type != t {
+        return false
+    }
+    return true
+}
+
 func isHello(in []byte) (bool, *Message) {
     var m Message
     if err := json.Unmarshal(in, &m); err != nil {
@@ -74,3 +88,4 @@ func isHello(in []byte) (bool, *Message) {
 
     return true, &m
 }
+

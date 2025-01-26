@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"time"
+    "bufio"
 )
 
 const (
@@ -96,7 +97,6 @@ func (s server) Start() error {
         }
         fmt.Println("Accepted new connection")
         go s.handleConnection(conn)
-        // client.handleConnection()
     }
 }
 
@@ -109,58 +109,72 @@ func (s server)handleConnection(connection net.Conn){
         fmt.Printf("could not shake hands: %s", err)
         return 
     }
+	fmt.Println("Handshake complete")
 
-    clientMsgCh := s.broker.Subscribe()
+	msgCh := s.broker.Subscribe()
     var wg sync.WaitGroup
-    // handle writing to connection
-    fmt.Println("Starting client writer worker")
+    clientDisconnect := make(chan struct{})
 
     wg.Add(1)
+    // Writer worker
     go func(){
+        fmt.Println("writer for client", client.name, "up")
         defer wg.Done()
-        for {
-            select {
-            case msg:=<-*clientMsgCh:
-                // Prevent a message from echoing back to the user
-                if msg.Author != client.name {
-                    jsonRaw, err := json.Marshal(&msg)
-                    if err != nil {
-                        fmt.Println("could not marshal message received from client channel:", err)
-                    }
-    
-    
-                    io.WriteString(connection, string(jsonRaw))
+        defer fmt.Println("writer for client", client.name, "exiting...")
+	    for {
+	    	select {
+	    	case msg := <-*msgCh:
+                rawMsg, err := json.Marshal(msg)
+                if err != nil {
+                    fmt.Println("could not write to connection", err)
                 }
-            case <-s.quit:
-                return
-            }
-        }
+	    		connection.Write(rawMsg)
+	    	case <-clientDisconnect:
+	    		return
+	    	}
+	    }
     }()
+
     wg.Add(1)
-    // handle reading from the connection
-    fmt.Println("Starting client reader worker")
+    // Reader worker
     go func(){
+        fmt.Println("reader for client", client.name, "up")
+        
         defer wg.Done()
-        //TODO: Here we should handle a reader timeout as well.
-        readerBuffer := make([]byte, 1<<10)
+        defer fmt.Println("reader for client", client.name, "exiting...")
+
+        reader := bufio.NewReader(connection)
         for {
             select {
-                case <-s.quit:
+                case <- clientDisconnect:
                     return
                 default:
-                    // TODO: I think if we handle this with a bufio reader/scanner, we can actually terminate the connection once EOF has been reached.
-                    n,  err := connection.Read(readerBuffer)
+                    data, err := io.ReadAll(reader)
                     if err != nil {
-                        fmt.Println("could to read from the connection", err)
+                        fmt.Println("could not read from client", err)
                         continue
                     }
-                    msg, err := unmarshalMessage(readerBuffer[:n]) 
-                    s.broker.Publish(msg)
+
+                    if isTypeFromRaw(data, msgTypeBye){
+                        fmt.Println("received bye message from client", client.name)
+                        clientDisconnect <- struct{}{}
+                        return
+                    }
+                    
+                    if data != nil {
+                        var m *Message
+                        if err := json.Unmarshal(data, m); err != nil {
+                            fmt.Println("could not unmarshal received message:", err)
+                            continue
+                        }
+                        *msgCh <- m
+                    }
             }
         }
     }()
 
     wg.Wait()
+    fmt.Println("both workers have finished, exiting the connection handler...")
 }
 
 // Handshake is used to read the first initial message sent from a client.
