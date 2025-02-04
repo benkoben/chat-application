@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+    "log"
 	"sync"
-	"time"
     "bufio"
 )
 
@@ -23,11 +23,6 @@ type server struct {
 	quit   chan struct{}
     connections map[client]net.Conn
 }
-
-// When a new connection is received
-// then add the connection to a channel
-
-// Have a go routine modify the server.connections
 
 type ServerOpts struct {
 	Broker     *Broker
@@ -63,39 +58,38 @@ func (s server) Start() error {
 	if err != nil {
 		return fmt.Errorf("could not open socket: %s", err)
 	}
-	fmt.Printf("Listening on %s:%s\n", s.host, s.port)
+	log.Printf("Listening on %s:%s\n", s.host, s.port)
 
 	defer ln.Close()
 
 	go s.broker.Start()
 
-	go func() {
-		for {
-			select {
-			case <-s.quit:
-				return
-			default:
-				time.Sleep(time.Second * 20)
+	// go func() {
+	// 	for {
+	// 		select {
+	// 		case <-s.quit:
+	// 			return
+	// 		default:
+	// 			time.Sleep(time.Second * 20)
 
-				m := Message{
-					Timestamp: time.Now().Format(time.RFC850),
-					Author:    "system",
-					Body:      "This is a broadcasted message",
-				}
+	// 			m := Message{
+	// 				Timestamp: time.Now().Format(time.RFC850),
+	// 				Author:    "system",
+	// 				Body:      "This is a broadcasted message",
+	// 			}
 
-				s.broker.Publish(&m)
-			}
-		}
-	}()
+	// 			s.broker.Publish(&m)
+	// 		}
+	// 	}
+	// }()
 
 	for {
-        fmt.Println("Waiting for new connection")
         conn, err := ln.Accept()
         if err != nil {
-            fmt.Printf("failed to accept connection: %s\n", err)
+            log.Printf("failed to accept connection: %s\n", err)
             continue
         }
-        fmt.Println("Accepted new connection")
+        log.Print("Accepted new connection")
         go s.handleConnection(conn)
     }
 }
@@ -106,10 +100,10 @@ func (s server)handleConnection(connection net.Conn){
 
     client, err := handshake(connection) 
     if err != nil {
-        fmt.Printf("could not shake hands: %s", err)
+        log.Printf("could not shake hands: %s", err)
         return 
     }
-	fmt.Println("Handshake complete")
+	log.Print(client.name, "connected from ", connection.RemoteAddr())
 
 	msgCh := s.broker.Subscribe()
     var wg sync.WaitGroup
@@ -118,17 +112,20 @@ func (s server)handleConnection(connection net.Conn){
     wg.Add(1)
     // Writer worker
     go func(){
-        fmt.Println("writer for client", client.name, "up")
         defer wg.Done()
-        defer fmt.Println("writer for client", client.name, "exiting...")
 	    for {
 	    	select {
 	    	case msg := <-*msgCh:
-                rawMsg, err := json.Marshal(msg)
-                if err != nil {
-                    fmt.Println("could not write to connection", err)
+
+                // Filter out messages than originate from the same client
+                // in order to prevent echoing.
+                if msg.Author != client.name {
+                    rawMsg, err := json.Marshal(msg)
+                    if err != nil {
+                        log.Print("could not write to connection", err)
+                    }
+	    	    	connection.Write(rawMsg)
                 }
-	    		connection.Write(rawMsg)
 	    	case <-clientDisconnect:
 	    		return
 	    	}
@@ -136,52 +133,67 @@ func (s server)handleConnection(connection net.Conn){
     }()
 
     wg.Add(1)
+
     // Reader worker
     go func(){
-        fmt.Println("reader for client", client.name, "up")
-        
         defer wg.Done()
-        defer fmt.Println("reader for client", client.name, "exiting...")
-
-        reader := bufio.NewReader(connection)
         for {
             select {
                 case <- clientDisconnect:
                     return
                 default:
-                    data, err := io.ReadAll(reader)
+                    chunk := make([]byte, 1<<10)
+                    reader := bufio.NewReader(connection)
+                    n, err := reader.Read(chunk)
+
                     if err != nil {
-                        fmt.Println("could not read from client", err)
+                        
+                        if err == io.EOF {
+                            // If there fore some reason an EOF is encountered
+                            // the connection is terminated. Cleanup and return
+                            log.Print(client.name, " disconnected")
+                            clientDisconnect <- struct{}{}
+                            return
+                        }
+
+                        log.Print("could not read from client", client.name, err)
                         continue
                     }
 
-                    if isTypeFromRaw(data, msgTypeBye){
-                        fmt.Println("received bye message from client", client.name)
-                        clientDisconnect <- struct{}{}
-                        return
-                    }
+                    if n > 0 {
+                        data := chunk[:n]
+
+                        if isTypeFromRaw(data, msgTypeBye){
+                            // If the client has gracefully sent a BYE message then
+                            // cleanup and return
+                            log.Print(client.name, " disconnected")
+                            clientDisconnect <- struct{}{}
+                            return
+                        }
                     
-                    if data != nil {
-                        var m *Message
-                        if err := json.Unmarshal(data, m); err != nil {
-                            fmt.Println("could not unmarshal received message:", err)
+                        // Continue otherwise
+                        var m Message
+                        if err := json.Unmarshal(data, &m); err != nil {
+                            log.Print("could not unmarshal received message: ", err)
                             continue
                         }
-                        *msgCh <- m
+                        s.broker.Publish(&m)
                     }
             }
         }
     }()
 
     wg.Wait()
-    fmt.Println("both workers have finished, exiting the connection handler...")
+    // Return and cleanup if both reader and writer go routines are done.
 }
 
-// Handshake is used to read the first initial message sent from a client.
-// It is a blocking function untill the first recevied message is read from conn.
-//
-// If the message is valid handshake will let the client know the server has accepted the client
-// and constructs a client type which is returned
+/*
+Handshake is used to read the first initial message sent from a client.
+It is a blocking function untill the first recevied message is read from conn.
+
+If the message is valid handshake will let the client know the server has accepted the client
+and constructs a client type which is returned
+*/
 func handshake(conn net.Conn) (*client, error) {
 	// Here we need to implement a handshake to exchange client information.
 	helloMsgBuf := make([]byte, 1<<10)
@@ -202,7 +214,6 @@ func handshake(conn net.Conn) (*client, error) {
         return nil, fmt.Errorf("could not respond to client: %s", err)
     }
 
-    fmt.Println(clientMsg) 
     client := newClient(clientMsg.Author) 
     return &client,nil
 }

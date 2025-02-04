@@ -1,6 +1,6 @@
 package server
 
-import "fmt"
+import "log"
 
 type Broker struct {
 	publishChannel     chan *Message
@@ -28,11 +28,11 @@ func (b *Broker) Start() {
 		case msgCh := <-b.unsubscribeChannel:
 			delete(subscribers, msgCh)
 		case msg := <-b.publishChannel:
-			fmt.Println("Broker received a message")
+			log.Print("Broker received a message")
 			for msgCh := range subscribers {
 				select {
 				case msgCh <- msg:
-					fmt.Println("Broker published message to subscriber")
+					log.Print("Broker published message to subscriber")
 				default:
 				}
 			}
