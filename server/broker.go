@@ -1,6 +1,9 @@
 package server
 
-import "log"
+import (
+	"context"
+	"log"
+)
 
 type Broker struct {
 	publishChannel     chan *Message
@@ -58,4 +61,16 @@ func (b *Broker) Unsubscribe(msgCh *chan *Message) {
 
 func (b *Broker) Publish(msg *Message) {
 	b.publishChannel <- msg
+}
+
+// writer reads messages from the provided channel and publishes them to the broker until context is cancelled.
+func (b *Broker) writer(ctx context.Context, msgCh *messageCh) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-*msgCh:
+			b.Publish(msg)
+		}
+	}
 }

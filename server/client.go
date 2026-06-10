@@ -1,15 +1,14 @@
 package server
 
-// A wrapper around net.Conn adding additional
-// data and methods for handling individual client connections
+// A client is a representation of someone connected to the server
+
 type client struct {
 	// Name of the client that is connected
 	name string
 }
 
-func newClient(name string) client { 
+func newClient(name string) client {
 	return client{
-        name: name,
+		name: name,
 	}
 }
-
