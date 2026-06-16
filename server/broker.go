@@ -49,10 +49,10 @@ func (b *Broker) Stop() {
 	b.quit <- struct{}{}
 }
 
-func (b *Broker) Subscribe() *chan *Message {
+func (b *Broker) Subscribe() chan *Message {
 	msgCh := make(chan *Message, 10)
 	b.subscribeChannel <- msgCh
-	return &msgCh
+	return msgCh
 }
 
 func (b *Broker) Unsubscribe(msgCh *chan *Message) {
@@ -63,14 +63,16 @@ func (b *Broker) Publish(msg *Message) {
 	b.publishChannel <- msg
 }
 
-// writer reads messages from the provided channel and publishes them to the broker until context is cancelled.
+// the writer reads messages from the provided channel and publishes them to the broker until context is canceled.
 func (b *Broker) writer(ctx context.Context, msgCh *messageCh) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-*msgCh:
-			b.Publish(msg)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg := <-*msgCh:
+				b.Publish(msg)
+			}
 		}
-	}
+	}()
 }

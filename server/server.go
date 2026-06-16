@@ -69,7 +69,7 @@ func (s server) Start() error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Printf("failed to accept connection: %s\n", err)
+			log.Printf("ACCEPT FAILED - ADDR: %s", conn.RemoteAddr())
 			continue
 		}
 		log.Print("Accepted new connection")
@@ -87,116 +87,50 @@ func (s server) handleConnection(connection net.Conn) {
 
 	client, err := handshake(handshakeCtx, connection)
 	if err != nil {
-		log.Printf("could not shake hands: %s", err)
+		log.Printf("Handshake failed - ADDR: %s", connection.RemoteAddr())
 		return
 	}
-	log.Print(client.name, "connected from ", connection.RemoteAddr())
+	log.Printf("Handshake success - ADDR: %s CLIENT: %s", connection.RemoteAddr(), client.name)
 
 	brokerMsgCh := s.broker.Subscribe()
 	clientConnection := newClientConnection(connection)
 
-	workersCtx, cancel := context.WithCancel(ctx)
+	workersCtx, workerCancel := context.WithCancel(ctx)
 	wg := sync.WaitGroup{}
-	// Writes to net.Conn if a message from broker is received
-	errCh := clientConnection.transmit(workersCtx, brokerMsgCh, client)
-	msgCh, doneCh := clientConnection.receive(workersCtx, brokerMsgCh)
 
+	// Read from the connection and write to msgCh
+	msgCh, rxErrs, done := clientConnection.receive(workersCtx)
+	// The broker will write to the brokerMsgCh
 	s.broker.writer(workersCtx, msgCh)
+	// The transmitter will read from the broker channel and write to the connection
+	txErrs := clientConnection.transmit(workersCtx, brokerMsgCh, client)
+
 	wg.Go(func() {
 		for {
 			select {
-			case <-*doneCh:
-				cancel()
-			case <-workersCtx.Done():
+			case <-done:
+				if err := clientConnection.Close(ctx); err != nil {
+					log.Printf("Connection failed to close properly - ADDR: %s CLIENT: %s, MSG: %s",
+						connection.RemoteAddr(),
+						client.name,
+						err,
+					)
+				}
+				log.Printf("Connection terminated - ADDR: %s CLIENT: %s", connection.RemoteAddr(), client.name)
+
+				// Signal cancellation to the workers
+				workerCancel()
 				return
-			case err := <-errCh:
-				log.Print("error in client connection: ", err)
+			case <-workersCtx.Done():
+				// Clean up this goroutine
+				return
+			case err := <-txErrs:
+				log.Printf("Write connection error - ADDR: %s, CLIENT: %s, MSG: %s", connection.RemoteAddr(), client.name, err)
+			case err := <-rxErrs:
+				log.Printf("Read connection error - ADDR: %s, CLIENT: %s, MSG: %s", connection.RemoteAddr(), client.name, err)
 			}
 		}
 	})
 
-	//var wg sync.WaitGroup
-	//clientDisconnect := make(chan struct{})
-	//
-	//wg.Add(1)
-	//// Writer worker
-	//go func() {
-	//	defer wg.Done()
-	//	for {
-	//		select {
-	//		case msg := <-*msgCh:
-	//
-	//			// Filter out messages than originate from the same client
-	//			// in order to prevent echoing.
-	//			if msg.Author != client.name {
-	//				rawMsg, err := json.Marshal(msg)
-	//				if err != nil {
-	//					log.Print("could not write to connection", err)
-	//				}
-	//				connection.Write(rawMsg)
-	//			}
-	//		case <-clientDisconnect:
-	//			// Cancellation
-	//			return
-	//		}
-	//	}
-	//}()
-	//
-	//wg.Add(1)
-	//
-	//// Reader worker
-	//go func() {
-	//	defer wg.Done()
-	//	for {
-	//		select {
-	//		// Cancellation
-	//		case <-clientDisconnect:
-	//			return
-	//		default:
-	//			chunk := make([]byte, 1<<10)
-	//			reader := bufio.NewReader(connection)
-	//			n, err := reader.Read(chunk)
-	//
-	//			if err != nil {
-	//
-	//				if err == io.EOF {
-	//					// If there fore some reason an EOF is encountered
-	//					// the connection is terminated. Cleanup and return
-	//					log.Print(client.name, " disconnected")
-	//					// Completion
-	//					clientDisconnect <- struct{}{}
-	//					return
-	//				}
-	//
-	//				log.Print("could not read from client", client.name, err)
-	//				continue
-	//			}
-	//
-	//			if n > 0 {
-	//				data := chunk[:n]
-	//
-	//				if isTypeFromRaw(data, msgTypeBye) {
-	//					// If the client has gracefully sent a BYE message then
-	//					// cleanup and return
-	//					log.Print(client.name, " disconnected")
-	//					clientDisconnect <- struct{}{}
-	//					return
-	//
-	//					// Completion
-	//				}
-	//
-	//				// Continue otherwise
-	//				var m Message
-	//				if err := json.Unmarshal(data, &m); err != nil {
-	//					log.Print("could not unmarshal received message: ", err)
-	//					continue
-	//				}
-	//				s.broker.Publish(&m)
-	//			}
-	//		}
-	//	}
-	//}()
-	//
-	//wg.Wait()
-	// Return and cleanup if both reader and writer go routines are done.
+	wg.Wait()
 }
