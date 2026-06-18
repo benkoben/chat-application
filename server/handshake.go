@@ -8,19 +8,11 @@ import (
 	"time"
 )
 
-const (
-	connectionTimeout = 10 * time.Second
-)
-
-/*
-Handshake is used to read the first initial message sent from a client.
-It is a blocking function until the first received message is read from conn.
-
-If the message is valid handshake will let the client know the server has accepted the client
-and constructs a client type which is returned
-*/
-func handshake(ctx context.Context, conn net.Conn) (*client, error) {
-	// Here we need to implement a handshake to exchange client information.
+// handshake performs the initial handshake protocol with a new client connection by exchanging hello messages
+// and returns a client instance with the client's author name upon successful completion.
+func handshake(_ context.Context, conn net.Conn) (*client, error) {
+	conn.SetReadDeadline(time.Now().Add(time.Second * 5))
+	defer conn.SetReadDeadline(time.Time{}) // clear read deadline when exiting
 
 	helloMsgBuf := make([]byte, 1<<10) // TODO: This should not be hardcoded into 1024 bytes
 	n, err := conn.Read(helloMsgBuf)

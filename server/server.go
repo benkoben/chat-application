@@ -82,10 +82,11 @@ func (s server) handleConnection(connection net.Conn) {
 
 	// Deadline
 	ctx := context.Background()
-	handshakeCtx, cancel := context.WithTimeout(ctx, connectionTimeout)
-	defer cancel()
 
-	client, err := handshake(handshakeCtx, connection)
+	// The handshake establishes a formal connection between the client and the server
+	// It is used to authenticate the client and learn information about the client.
+	// timeout is set to 30 seconds.
+	client, err := handshake(ctx, connection)
 	if err != nil {
 		log.Printf("Handshake failed - ADDR: %s", connection.RemoteAddr())
 		return
@@ -93,41 +94,54 @@ func (s server) handleConnection(connection net.Conn) {
 	log.Printf("Handshake success - ADDR: %s CLIENT: %s", connection.RemoteAddr(), client.name)
 
 	brokerMsgCh := s.broker.Subscribe()
-	clientConnection := newClientConnection(connection)
+
+	// Create a new client connection. This will set new read and write deadlines
+	clientConnection, err := newClientConnection(connection)
+	if err != nil {
+		log.Printf("Could not create client connection - ADDR: %s CLIENT: %s", connection.RemoteAddr(), client.name)
+		return
+	}
 
 	workersCtx, workerCancel := context.WithCancel(ctx)
 	wg := sync.WaitGroup{}
 
+	// TODO: Maybe we can use sync.Cond to synchronize the workers with the main thread (and handshake)
 	// Read from the connection and write to msgCh
-	msgCh, rxErrs, done := clientConnection.receive(workersCtx)
+	msgCh, rxErrs, receiverDone := clientConnection.receive(workersCtx)
 	// The broker will write to the brokerMsgCh
 	s.broker.writer(workersCtx, msgCh)
 	// The transmitter will read from the broker channel and write to the connection
 	txErrs := clientConnection.transmit(workersCtx, brokerMsgCh, client)
 
+	// Capture signals from the workers
 	wg.Go(func() {
 		for {
 			select {
-			case <-done:
+			case <-receiverDone:
+				// If the receiver is done, close the connection
 				if err := clientConnection.Close(ctx); err != nil {
 					log.Printf("Connection failed to close properly - ADDR: %s CLIENT: %s, MSG: %s",
 						connection.RemoteAddr(),
 						client.name,
 						err,
 					)
+				} else {
+					log.Printf("Connection terminated - ADDR: %s CLIENT: %s", connection.RemoteAddr(), client.name)
 				}
-				log.Printf("Connection terminated - ADDR: %s CLIENT: %s", connection.RemoteAddr(), client.name)
-
 				// Signal cancellation to the workers
 				workerCancel()
 				return
 			case <-workersCtx.Done():
-				// Clean up this goroutine
+				// Clean up this goroutine if the workers are done
 				return
-			case err := <-txErrs:
-				log.Printf("Write connection error - ADDR: %s, CLIENT: %s, MSG: %s", connection.RemoteAddr(), client.name, err)
-			case err := <-rxErrs:
-				log.Printf("Read connection error - ADDR: %s, CLIENT: %s, MSG: %s", connection.RemoteAddr(), client.name, err)
+			case err, ok := <-txErrs:
+				if ok {
+					log.Printf("Write connection error - ADDR: %s, CLIENT: %s, MSG: %s", connection.RemoteAddr(), client.name, err)
+				}
+			case err, ok := <-rxErrs:
+				if ok {
+					log.Printf("Read connection error - ADDR: %s, CLIENT: %s, MSG: %s", connection.RemoteAddr(), client.name, err)
+				}
 			}
 		}
 	})

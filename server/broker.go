@@ -64,14 +64,17 @@ func (b *Broker) Publish(msg *Message) {
 }
 
 // the writer reads messages from the provided channel and publishes them to the broker until context is canceled.
-func (b *Broker) writer(ctx context.Context, msgCh *messageCh) {
+func (b *Broker) writer(ctx context.Context, msgCh messageCh) {
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
+				log.Print("Closing broker writer goroutine")
 				return
-			case msg := <-*msgCh:
-				b.Publish(msg)
+			case msg, ok := <-msgCh:
+				if ok {
+					b.Publish(msg)
+				}
 			}
 		}
 	}()

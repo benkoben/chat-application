@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"time"
 )
 
 type clientConnection struct {
@@ -16,12 +15,10 @@ type clientConnection struct {
 	client     *client
 }
 
-const handshakeTimeout = 10 * time.Second
-
-func newClientConnection(connection net.Conn) *clientConnection {
+func newClientConnection(connection net.Conn) (*clientConnection, error) {
 	return &clientConnection{
 		connection: connection,
-	}
+	}, nil
 }
 
 func (c *clientConnection) Close(ctx context.Context) error {
@@ -41,7 +38,7 @@ func (c *clientConnection) transmit(ctx context.Context, msgCh chan *Message, cl
 		for {
 			select {
 			case <-ctx.Done():
-				fmt.Println("Closing transmit goroutine")
+				log.Print("Closing transmit goroutine")
 				return
 			case msg := <-msgCh:
 				if msg.Author != client.name {
@@ -50,7 +47,6 @@ func (c *clientConnection) transmit(ctx context.Context, msgCh chan *Message, cl
 						log.Print("could not write to connection", err)
 					}
 
-					// TODO:  Should I have a timeout here?
 					if _, err := c.connection.Write(rawMsg); err != nil {
 						errCh <- fmt.Errorf("could not write to connection: %s", err)
 					}
@@ -66,21 +62,22 @@ func (c *clientConnection) transmit(ctx context.Context, msgCh chan *Message, cl
 // and completion signals. It reads data in 1KB chunks, unmarshals JSON messages, and sends them to the message
 // channel. The method handles context cancellation, EOF conditions, and BYE message types by signaling completion
 // through the done channel. Invalid messages are logged and skipped without stopping the receiver.
-func (c *clientConnection) receive(ctx context.Context) (*messageCh, errCh, doneCh) {
+func (c *clientConnection) receive(ctx context.Context) (messageCh, errCh, doneCh) {
 	done := make(doneCh)
 	rxErrs := make(errCh)
 	out := make(messageCh)
 
 	go func() {
 		// Clean up on exit
-		//defer close(out) // TODO: This is currently causing a panic
+		defer close(out)
 		defer close(rxErrs)
 		defer close(done)
 
 		for {
 			select {
 			case <-ctx.Done():
-				log.Print("Closing receiver goroutine") // TODO: This is not run when context is cancelled
+				// If for some reason the context is canceled, close the receiver
+				log.Print("Closing receiver goroutine")
 				return
 			default:
 				chunk := make([]byte, 1<<10) // TODO: This should not be hardcoded into 1024 bytes
@@ -90,9 +87,12 @@ func (c *clientConnection) receive(ctx context.Context) (*messageCh, errCh, done
 
 					if err == io.EOF {
 						// Signal completion
+						log.Print("receiver goroutine received EOF, signalling completion")
 						done <- struct{}{}
 						return
 					}
+
+					rxErrs <- fmt.Errorf("could not read from connection: %s", err)
 
 					continue
 				}
@@ -103,6 +103,7 @@ func (c *clientConnection) receive(ctx context.Context) (*messageCh, errCh, done
 					if isTypeFromRaw(data, msgTypeBye) {
 						// If the client has gracefully sent a BYE message, then
 						// cleanup and return
+						log.Print("receiver goroutine received BYE message, signalling completion")
 						done <- struct{}{}
 						return
 					}
@@ -119,5 +120,5 @@ func (c *clientConnection) receive(ctx context.Context) (*messageCh, errCh, done
 		}
 	}()
 
-	return &out, rxErrs, done
+	return out, rxErrs, done
 }
