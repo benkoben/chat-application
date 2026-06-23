@@ -1,9 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
-    "time"
-    "encoding/json"
+	"time"
 )
 
 // The following message types are used to distinguish the purpose of transmissions between
@@ -42,50 +42,49 @@ func (m Message) String() string {
 	return fmt.Sprintf("%s - %s: %s\n", m.Timestamp, m.Author, m.Body)
 }
 
-// returns a raw byte slice of an Hello type message
+// returns a raw byte slice of a Hello type message
 func newRawHelloMsg() []byte {
-    m := Message{
-        Timestamp: time.Now().Format(time.RFC850),
-        Type: msgTypeHello,
-    }
-    rawMsg, _ := json.Marshal(m)
-    return rawMsg
+	m := Message{
+		Timestamp: time.Now().Format(time.RFC850),
+		Type:      msgTypeHello,
+	}
+	rawMsg, _ := json.Marshal(m)
+	return rawMsg
 }
 
 func unmarshalMessage(data []byte) (*Message, error) {
-   var msg Message
-   err := json.Unmarshal(data, &msg) 
-   if err != nil {
-       return nil, fmt.Errorf("could not unmarshal incoming message: ", err)
-   }
+	var msg Message
+	err := json.Unmarshal(data, &msg)
+	if err != nil {
+		return nil, fmt.Errorf("could not unmarshal incoming message: %w", err)
+	}
 
-   return &msg, nil
+	return &msg, nil
 }
 
 // Checks if a message if of a given type, returns true of msg matches t
 func isTypeFromRaw(raw []byte, t messageType) bool {
-    var m Message
-    if err := json.Unmarshal(raw, &m); err != nil {
-        fmt.Println("could not unmarshal raw:", err)
-        return false
-    }
+	var m Message
+	if err := json.Unmarshal(raw, &m); err != nil {
+		fmt.Println("could not unmarshal raw:", err)
+		return false
+	}
 
-    if m.Type != t {
-        return false
-    }
-    return true
+	if m.Type != t {
+		return false
+	}
+	return true
 }
 
 func isHello(in []byte) (bool, *Message) {
-    var m Message
-    if err := json.Unmarshal(in, &m); err != nil {
-        return false, nil
-    }
+	var m Message
+	if err := json.Unmarshal(in, &m); err != nil {
+		return false, nil
+	}
 
-    if m.Type != msgTypeHello {
-        return false, nil
-    }
+	if m.Type != msgTypeHello {
+		return false, nil
+	}
 
-    return true, &m
+	return true, &m
 }
-

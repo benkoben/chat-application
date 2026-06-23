@@ -88,7 +88,7 @@ func (s server) handleConnection(connection net.Conn) {
 	// timeout is set to 30 seconds.
 	client, err := handshake(ctx, connection)
 	if err != nil {
-		log.Printf("Handshake failed - ADDR: %s", connection.RemoteAddr())
+		log.Printf("Handshake failed - ADDR: %s, ERR: %s", connection.RemoteAddr(), err)
 		return
 	}
 	log.Printf("Handshake success - ADDR: %s CLIENT: %s", connection.RemoteAddr(), client.name)
