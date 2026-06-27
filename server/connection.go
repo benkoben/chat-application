@@ -41,6 +41,7 @@ func (c *clientConnection) transmit(ctx context.Context, msgCh chan *Message, cl
 				log.Print("Closing transmit goroutine")
 				return
 			case msg := <-msgCh:
+				// TODO: We should to the comparison on the session id instead because names are not a valid way to identify clients
 				if msg.Author != client.name {
 					rawMsg, err := json.Marshal(msg)
 					if err != nil {
@@ -99,7 +100,8 @@ func (c *clientConnection) receive(ctx context.Context) (messageCh, errCh, doneC
 
 				if n > 0 {
 					data := chunk[:n]
-
+					// TODO: This needs to be replaced with the library type instead.
+					// TODO: we need to figure out a nice way to handle Fixed lenght messages and Dynamic Length messages durin runtime.
 					if isTypeFromRaw(data, msgTypeBye) {
 						// If the client has gracefully sent a BYE message, then
 						// cleanup and return

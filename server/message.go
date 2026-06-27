@@ -1,6 +1,7 @@
 package server
 
 import (
+	"chat-application/lib"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -8,6 +9,7 @@ import (
 
 // The following message types are used to distinguish the purpose of transmissions between
 // a client and the server
+// TODO: lets move away from using these constants and use the libs instead
 const (
 	msgTypeHello   messageType = iota
 	msgTypeMessage messageType = iota
@@ -31,10 +33,10 @@ func (m messageType) String() string {
 }
 
 type Message struct {
-	Author    string      `json:"author"`
-	Timestamp string      `json:"timestamp"`
-	Body      string      `json:"body"`
-	Type      messageType `json:"type"`
+	Author    string `json:"author"`
+	Timestamp string `json:"timestamp"`
+	Body      string `json:"body"`
+	Type      messageType
 }
 
 // Formats a message into a readable format. Omits the type field in the return value
@@ -52,16 +54,6 @@ func newRawHelloMsg() []byte {
 	return rawMsg
 }
 
-func unmarshalMessage(data []byte) (*Message, error) {
-	var msg Message
-	err := json.Unmarshal(data, &msg)
-	if err != nil {
-		return nil, fmt.Errorf("could not unmarshal incoming message: %w", err)
-	}
-
-	return &msg, nil
-}
-
 // Checks if a message if of a given type, returns true of msg matches t
 func isTypeFromRaw(raw []byte, t messageType) bool {
 	var m Message
@@ -76,15 +68,34 @@ func isTypeFromRaw(raw []byte, t messageType) bool {
 	return true
 }
 
-func isHello(in []byte) (bool, *Message) {
-	var m Message
-	if err := json.Unmarshal(in, &m); err != nil {
-		return false, nil
+func isHello(in []byte) bool {
+	if in == nil {
+		return false
 	}
 
-	if m.Type != msgTypeHello {
-		return false, nil
+	if len(in) < len(lib.Hello) {
+		return false
 	}
 
-	return true, &m
+	if string(in) != string(lib.Hello) {
+		return false
+	}
+
+	return true
+}
+
+func isBye(in []byte) bool {
+	if in == nil {
+		return false
+	}
+
+	if len(in) < len(lib.Hello) {
+		return false
+	}
+
+	if string(in) != string(lib.Bye) {
+		return false
+	}
+
+	return true
 }
