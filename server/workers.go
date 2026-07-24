@@ -2,6 +2,8 @@ package server
 
 import (
 	"bufio"
+	"bytes"
+	"chat-application/lib"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -31,7 +33,7 @@ func (c *clientConnection) Close(ctx context.Context) error {
 // transmit starts a goroutine that writes messages from msgCh to the connection, filtering out messages
 // authored by the specified client. Messages are marshaled to JSON before transmission. Returns an error channel
 // that reports write failures. The goroutine respects context cancellation and stops when ctx is done.
-func (c *clientConnection) transmit(ctx context.Context, msgCh chan *Message, client *client) errCh {
+func (c *clientConnection) transmit(ctx context.Context, msgCh chan *lib.Message, client *client) errCh {
 	errCh := make(errCh)
 	go func() {
 		defer close(errCh)
@@ -41,8 +43,7 @@ func (c *clientConnection) transmit(ctx context.Context, msgCh chan *Message, cl
 				log.Print("Closing transmit goroutine")
 				return
 			case msg := <-msgCh:
-				// TODO: We should to the comparison on the session id instead because names are not a valid way to identify clients
-				if msg.Author != client.name {
+				if !bytes.Equal(msg.SessionId, client.sessionId) {
 					rawMsg, err := json.Marshal(msg)
 					if err != nil {
 						log.Print("could not write to connection", err)
@@ -83,9 +84,10 @@ func (c *clientConnection) receive(ctx context.Context) (messageCh, errCh, doneC
 			default:
 				chunk := make([]byte, 1<<10) // TODO: This should not be hardcoded into 1024 bytes
 				reader := bufio.NewReader(c.connection)
+
+				// TODO: This is probably blocking (preventing the select cases from triggering), we need to figure out a way to handle it. There is a chapter on this in the goroutines book.
 				n, err := reader.Read(chunk)
 				if err != nil {
-
 					if err == io.EOF {
 						// Signal completion
 						log.Print("receiver goroutine received EOF, signalling completion")
@@ -101,7 +103,7 @@ func (c *clientConnection) receive(ctx context.Context) (messageCh, errCh, doneC
 				if n > 0 {
 					data := chunk[:n]
 					// TODO: This needs to be replaced with the library type instead.
-					// TODO: we need to figure out a nice way to handle Fixed lenght messages and Dynamic Length messages durin runtime.
+					// TODO: we need to figure out a nice way to handle Fixed length messages and Dynamic Length messages during runtime.
 					if isTypeFromRaw(data, msgTypeBye) {
 						// If the client has gracefully sent a BYE message, then
 						// cleanup and return
@@ -111,7 +113,8 @@ func (c *clientConnection) receive(ctx context.Context) (messageCh, errCh, doneC
 					}
 
 					// Continue otherwise
-					var m Message
+					var m lib.Message
+
 					if err := json.Unmarshal(data, &m); err != nil {
 						rxErrs <- fmt.Errorf("could not unmarshal received message: %s", err)
 						continue

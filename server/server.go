@@ -2,6 +2,7 @@
 package server
 
 import (
+	"chat-application/lib"
 	"context"
 	"fmt"
 	"log"
@@ -15,15 +16,14 @@ const (
 )
 
 type doneCh chan struct{}
-type messageCh chan *Message
+type messageCh chan *lib.Message
 type errCh chan error
 
 type server struct {
-	host        string
-	port        string
-	broker      *Broker
-	quit        chan struct{}
-	connections map[client]net.Conn
+	host   string
+	port   string
+	broker *Broker
+	quit   chan struct{}
 }
 
 type ServerOpts struct {
@@ -105,7 +105,6 @@ func (s server) handleConnection(connection net.Conn) {
 	workersCtx, workerCancel := context.WithCancel(ctx)
 	wg := sync.WaitGroup{}
 
-	// TODO: Maybe we can use sync.Cond to synchronize the workers with the main thread (and handshake)
 	// Read from the connection and write to msgCh
 	msgCh, rxErrs, receiverDone := clientConnection.receive(workersCtx)
 	// The broker will write to the brokerMsgCh

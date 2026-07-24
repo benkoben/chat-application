@@ -5,10 +5,13 @@ package server
 type client struct {
 	// Name of the client that is connected
 	name string
+
+	sessionId []byte
 }
 
-func newClient(name string) client {
+func newClient(name string, sessionId []byte) client {
 	return client{
-		name: name,
+		name:      name,
+		sessionId: sessionId,
 	}
 }
